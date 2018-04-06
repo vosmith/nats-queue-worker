@@ -10,12 +10,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"net/http"
 
+	"github.com/ivpusic/grpool"
 	"github.com/nats-io/go-nats"
 	"github.com/nats-io/go-nats-streaming"
 	"github.com/openfaas/faas/gateway/queue"
@@ -80,11 +82,26 @@ func main() {
 	var durable string
 	var qgroup string
 	var unsubscribe bool
+	var maxConcurrency int
 	var err error
+
+	if val, exists := os.LookupEnv("durable_subcription_name"); exists {
+		durable = val
+	}
+	if val, exists := os.LookupEnv("max_concurrency"); exists {
+		maxConcurrency, err = strconv.Atoi(val)
+		if err != nil {
+			fmt.Printf("Provided max_concurrency could not be parsed.  Defaulting to number of CPUs (%d)\n", runtime.NumCPU())
+			maxConcurrency = runtime.NumCPU()
+		}
+	}
 
 	client := makeClient()
 
 	startOpt := stan.StartWithLastReceived()
+
+	workerPool := grpool.NewPool(maxConcurrency, 1000)
+	defer workerPool.Release()
 
 	i := 0
 	mcb := func(msg *stan.Msg) {
@@ -113,27 +130,63 @@ func main() {
 
 		functionURL := fmt.Sprintf("http://%s%s:8080/%s", req.Function, functionSuffix, queryString)
 
-		request, err := http.NewRequest(http.MethodPost, functionURL, bytes.NewReader(req.Body))
-		defer request.Body.Close()
+		workerPool.JobQueue <- func() {
+			request, err := http.NewRequest(http.MethodPost, functionURL, bytes.NewReader(req.Body))
+			defer request.Body.Close()
 
-		for k, v := range req.Header {
-			request.Header[k] = v
-		}
+			for k, v := range req.Header {
+				request.Header[k] = v
+			}
 
-		res, err := client.Do(request)
-		var status int
-		var functionResult []byte
+			res, err := client.Do(request)
+			var status int
+			var functionResult []byte
 
-		if err != nil {
-			status = http.StatusServiceUnavailable
+			if err != nil {
+				status = http.StatusServiceUnavailable
 
-			log.Println(err)
+				log.Println(err)
+				timeTaken := time.Since(started).Seconds()
+
+				if req.CallbackURL != nil {
+					log.Printf("Callback to: %s\n", req.CallbackURL.String())
+
+					resultStatusCode, resultErr := postResult(&client, req, functionResult, status)
+					if resultErr != nil {
+						log.Println(resultErr)
+					} else {
+						log.Printf("Posted result: %d", resultStatusCode)
+					}
+				}
+
+				statusCode, reportErr := postReport(&client, req.Function, status, timeTaken, gatewayAddress)
+				if reportErr != nil {
+					log.Println(reportErr)
+				} else {
+					log.Printf("Posting report - %d\n", statusCode)
+				}
+				return
+			}
+
+			if res.Body != nil {
+				defer res.Body.Close()
+
+				resData, err := ioutil.ReadAll(res.Body)
+				functionResult = resData
+
+				if err != nil {
+					log.Println(err)
+				}
+				fmt.Println(string(functionResult))
+			}
+
 			timeTaken := time.Since(started).Seconds()
+
+			fmt.Println(res.Status)
 
 			if req.CallbackURL != nil {
 				log.Printf("Callback to: %s\n", req.CallbackURL.String())
-
-				resultStatusCode, resultErr := postResult(&client, req, functionResult, status)
+				resultStatusCode, resultErr := postResult(&client, req, functionResult, res.StatusCode)
 				if resultErr != nil {
 					log.Println(resultErr)
 				} else {
@@ -141,47 +194,13 @@ func main() {
 				}
 			}
 
-			statusCode, reportErr := postReport(&client, req.Function, status, timeTaken, gatewayAddress)
+			statusCode, reportErr := postReport(&client, req.Function, res.StatusCode, timeTaken, gatewayAddress)
+
 			if reportErr != nil {
 				log.Println(reportErr)
 			} else {
 				log.Printf("Posting report - %d\n", statusCode)
 			}
-			return
-		}
-
-		if res.Body != nil {
-			defer res.Body.Close()
-
-			resData, err := ioutil.ReadAll(res.Body)
-			functionResult = resData
-
-			if err != nil {
-				log.Println(err)
-			}
-			fmt.Println(string(functionResult))
-		}
-
-		timeTaken := time.Since(started).Seconds()
-
-		fmt.Println(res.Status)
-
-		if req.CallbackURL != nil {
-			log.Printf("Callback to: %s\n", req.CallbackURL.String())
-			resultStatusCode, resultErr := postResult(&client, req, functionResult, res.StatusCode)
-			if resultErr != nil {
-				log.Println(resultErr)
-			} else {
-				log.Printf("Posted result: %d", resultStatusCode)
-			}
-		}
-
-		statusCode, reportErr := postReport(&client, req.Function, res.StatusCode, timeTaken, gatewayAddress)
-
-		if reportErr != nil {
-			log.Println(reportErr)
-		} else {
-			log.Printf("Posting report - %d\n", statusCode)
 		}
 	}
 
@@ -259,6 +278,9 @@ func main() {
 			}
 			sc.Close()
 			natsConn.Close()
+
+			fmt.Printf("Waiting for workerPool to drain...\n\n")
+			workerPool.WaitAll()
 			cleanupDone <- true
 		}
 	}()
