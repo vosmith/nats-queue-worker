@@ -100,7 +100,7 @@ func main() {
 
 	startOpt := stan.StartWithLastReceived()
 
-	workerPool := grpool.NewPool(maxConcurrency, 1000)
+	workerPool := grpool.NewPool(maxConcurrency, maxConcurrency)
 	defer workerPool.Release()
 
 	i := 0

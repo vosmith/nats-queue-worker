@@ -3,28 +3,23 @@
 
 [[projects]]
   name = "github.com/gogo/protobuf"
-  packages = [
-    "gogoproto",
-    "proto",
-    "protoc-gen-gogo/descriptor"
-  ]
+  packages = ["gogoproto","proto","protoc-gen-gogo/descriptor"]
   revision = "dda3e8acadcc9affc16faf33fbb229db78399245"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/ivpusic/grpool"
+  packages = ["."]
+  revision = "28957a27c9441f178d644aa598bac0aad4dd7bba"
+
+[[projects]]
   name = "github.com/nats-io/go-nats"
-  packages = [
-    ".",
-    "encoders/builtin",
-    "util"
-  ]
+  packages = [".","encoders/builtin","util"]
   revision = "34c8842105ac0b69c838a9998a239d482936c466"
 
 [[projects]]
   name = "github.com/nats-io/go-nats-streaming"
-  packages = [
-    ".",
-    "pb"
-  ]
+  packages = [".","pb"]
   revision = "bf8654e90f5296da96eab1e85808eb5c4b7b5541"
 
 [[projects]]
@@ -41,6 +36,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "fe8289976e631b3bf1660580590b8ac99b1b9e14d5274411cfdf2f943b1eec61"
+  inputs-digest = "9f59d787027bd0b866bd410c1a386fa47ec62eedcdea1e14fa38593d98dafb9d"
   solver-name = "gps-cdcl"
   solver-version = 1
